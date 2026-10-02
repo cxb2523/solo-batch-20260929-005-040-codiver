@@ -16,6 +16,10 @@ class NamingSmells(CodeSmell):
     - Invalid method names (camelCase)
     - Short identifiers
     """
+
+    detector_id = "naming"
+    priority = 30
+    config_key = "naming"
     
     def detect(self, tree: javalang.tree.CompilationUnit, lines: List[str]) -> List[Dict[str, Any]]:
         """Detect all naming convention violations."""
@@ -71,6 +75,10 @@ class DocumentationSmells(CodeSmell):
     - Missing class Javadoc
     - Missing public method Javadoc
     """
+
+    detector_id = "documentation"
+    priority = 40
+    config_key = "documentation"
     
     def detect(self, tree: javalang.tree.CompilationUnit, lines: List[str]) -> List[Dict[str, Any]]:
         """Detect all documentation issues."""

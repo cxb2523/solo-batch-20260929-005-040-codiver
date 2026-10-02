@@ -11,6 +11,7 @@ import pandas as pd
 from datetime import datetime
 
 from analyzer_engine import StaticAnalyzerEngine
+from detectors.base import registry_conflicts
 from utils.ui_components import (
     render_executive_summary,
     render_code_metrics,
@@ -29,6 +30,12 @@ def initialize_session_state():
         st.session_state.analysis_results = None
     if 'analysis_metrics' not in st.session_state:
         st.session_state.analysis_metrics = None
+    if 'pipeline_report' not in st.session_state:
+        st.session_state.pipeline_report = None
+    if 'pipeline_score' not in st.session_state:
+        st.session_state.pipeline_score = None
+    if 'pipeline_status' not in st.session_state:
+        st.session_state.pipeline_status = None
     if 'source_code' not in st.session_state:
         st.session_state.source_code = None
     if 'file_name' not in st.session_state:
@@ -170,8 +177,17 @@ def handle_analysis(source_code: str, config: dict = None):
             # Store results in session state
             st.session_state.analysis_results = results
             st.session_state.analysis_metrics = metrics
+            st.session_state.pipeline_report = engine.pipeline_report
+            st.session_state.pipeline_score = engine.quality_score
+            st.session_state.pipeline_status = "ok"
             
     except ValueError as ve:
+        # Parse-level degradation: no detector ran, score is unavailable.
+        st.session_state.analysis_results = None
+        st.session_state.analysis_metrics = None
+        st.session_state.pipeline_report = []
+        st.session_state.pipeline_score = None
+        st.session_state.pipeline_status = "parse_failed"
         st.error(f"❌ **Validation Error:** {ve}")
         st.info(" [TIP]  Please ensure your Java file has valid syntax and try again.")
     except Exception as e:
@@ -181,6 +197,9 @@ def handle_analysis(source_code: str, config: dict = None):
 
 def display_analysis_results():
     """Display all analysis results from session state."""
+    if st.session_state.get('pipeline_status') == 'parse_failed':
+        render_pipeline_page()
+        return
     if st.session_state.analysis_results is not None:
         results = st.session_state.analysis_results
         metrics = st.session_state.analysis_metrics
@@ -188,6 +207,9 @@ def display_analysis_results():
         
         # Render all dashboard sections
         render_executive_summary(df, metrics)
+        st.markdown("---")
+
+        render_pipeline_page()
         st.markdown("---")
         
         render_code_metrics(metrics)
@@ -203,6 +225,87 @@ def display_analysis_results():
         
         # Summary report
         render_summary_report(df, metrics, st.session_state.file_name)
+
+
+def render_pipeline_page():
+    """
+    Render the detection pipeline page: detector registration order,
+    per-detector hit counts and normalized scores, plus the overall
+    quality score. Every number shown is reproducible from the formula
+    documented in docs/architecture.md:
+
+        score = clamp(100 - sum(weight(severity) * 5), 0, 100)
+        weights: Critical=4, High=3, Medium=2, Low=1
+    """
+    report = st.session_state.get('pipeline_report')
+
+    st.markdown("###  Detection Pipeline")
+
+    if report is None:
+        st.info("Run an analysis to inspect the detection pipeline.")
+        return
+
+    if st.session_state.get('pipeline_status') == 'parse_failed':
+        st.warning("AST parsing failed: no detector ran and the overall "
+                   "score is unavailable (N/A) instead of a misleading 0 or 100.")
+        return
+
+    if not report:
+        st.info("No detectors were enabled for this run.")
+        return
+
+    st.caption(
+        "Scoring formula: `score = clamp(100 - sum(weight(severity) x 5), 0, 100)` "
+        "with weights Critical=4 / High=3 / Medium=2 / Low=1. "
+        "Duplicate issues from multiple detectors are merged on (Type, Target): "
+        "the earliest detector in registration order keeps the issue, the "
+        "highest severity wins. Degraded detectors are excluded from scoring."
+    )
+
+    display_rows = []
+    for entry in report:
+        display_rows.append({
+            "Order": entry["order"],
+            "Detector ID": entry["detector_id"],
+            "Detector": entry["detector"],
+            "Status": entry["status"],
+            "Raw Hits": entry["raw_hits"],
+            "Hits (deduped)": entry["hits"],
+            "Weighted Penalty": entry["weighted_penalty"],
+            "Normalized Score": (
+                "N/A (degraded)" if entry["normalized_score"] is None
+                else entry["normalized_score"]
+            ),
+            "Error": entry["error"] or "",
+        })
+    st.dataframe(pd.DataFrame(display_rows), use_container_width=True, hide_index=True)
+
+    total_penalty = sum(entry["weighted_penalty"] for entry in report)
+    score = st.session_state.get('pipeline_score')
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Detectors Run", len(report))
+    with col2:
+        st.metric("Total Weighted Penalty", total_penalty)
+    with col3:
+        st.metric("Pipeline Quality Score",
+                  "N/A" if score is None else f"{score}/100")
+
+    degraded = [entry for entry in report if entry["status"] == "degraded"]
+    if degraded:
+        names = ", ".join(entry["detector"] for entry in degraded)
+        st.warning(f"Degraded detectors excluded from scoring: {names}. "
+                   "The score above is an optimistic upper bound computed "
+                   "from the remaining detectors only.")
+
+    conflicts = registry_conflicts()
+    if conflicts:
+        lines = "; ".join(
+            f"'{c['detector_id']}': kept {c['kept']}, skipped {c['skipped']}"
+            for c in conflicts
+        )
+        st.info(f"Registry id collisions resolved first-registered-wins: {lines}")
 
 
 def main():

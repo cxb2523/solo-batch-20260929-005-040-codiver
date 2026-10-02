@@ -1,10 +1,18 @@
 """
 Helper Functions
-Utility functions for naming validation, line counting, and other common tasks
+Utility functions for naming validation, line counting, issue
+deduplication and normalized quality scoring.
 """
 
 import re
-from typing import List
+from typing import Any, Dict, List, Optional
+
+
+# Severity weights shared by the pipeline report and the normalized score.
+SEVERITY_WEIGHTS = {"Critical": 4, "High": 3, "Medium": 2, "Low": 1}
+
+# Score points deducted per unit of severity weight.
+PENALTY_PER_WEIGHT = 5
 
 
 def validate_class_name(name: str) -> bool:
@@ -106,6 +114,78 @@ def calculate_quality_score(total_issues: int, critical_count: int) -> int:
     """
     score = 100 - (total_issues * 2) - (critical_count * 10)
     return max(0, score)
+
+
+def deduplicate_issues(issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Merge duplicate issues reported by multiple detectors.
+
+    Two issues are duplicates when they share the same (Type, Target).
+    The earliest occurrence (pipeline registration order) is kept as the
+    canonical entry, but its Severity/Reason are upgraded to the highest
+    severity seen across all duplicates, so the total weighted penalty is
+    independent of detector order.
+
+    Args:
+        issues: Raw issues in pipeline order
+
+    Returns:
+        Deduplicated issues, preserving first-occurrence order
+    """
+    merged: Dict[Any, Dict[str, Any]] = {}
+    order: List[Any] = []
+
+    for issue in issues:
+        key = (issue.get("Type"), issue.get("Target"))
+        if key not in merged:
+            merged[key] = dict(issue)
+            order.append(key)
+        else:
+            current = merged[key]
+            if SEVERITY_WEIGHTS.get(issue.get("Severity"), 0) > \
+                    SEVERITY_WEIGHTS.get(current.get("Severity"), 0):
+                current["Severity"] = issue["Severity"]
+                current["Reason"] = issue["Reason"]
+
+    return [merged[key] for key in order]
+
+
+def calculate_weighted_penalty(issues: List[Dict[str, Any]]) -> int:
+    """
+    Calculate the total weighted penalty of a list of issues.
+
+    penalty = PENALTY_PER_WEIGHT * sum(SEVERITY_WEIGHTS[severity])
+
+    Args:
+        issues: Issues (already deduplicated) to weigh
+
+    Returns:
+        Total penalty points
+    """
+    return sum(SEVERITY_WEIGHTS.get(i.get("Severity"), 0) for i in issues) * PENALTY_PER_WEIGHT
+
+
+def clamp_score(score: int) -> int:
+    """Clamp a score into the inclusive 0-100 range."""
+    return min(100, max(0, score))
+
+
+def calculate_normalized_score(issues: Optional[List[Dict[str, Any]]]) -> Optional[int]:
+    """
+    Calculate the normalized quality score: 100 minus the weighted
+    penalty, clamped to 0-100.
+
+    Args:
+        issues: Deduplicated issues, or None when the analysis data is
+            missing (e.g. AST parsing failed)
+
+    Returns:
+        Score in [0, 100], or None when the input data is missing so the
+        UI can render "N/A" instead of a misleading 0 or 100.
+    """
+    if issues is None:
+        return None
+    return clamp_score(100 - calculate_weighted_penalty(issues))
 
 
 def format_file_size(size_bytes: int) -> str:
