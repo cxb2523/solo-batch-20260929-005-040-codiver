@@ -10,7 +10,12 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 
-from analyzer_engine import StaticAnalyzerEngine
+from analyzer_engine import (
+    StaticAnalyzerEngine,
+    ISSUE_PENALTY,
+    REGISTRY_WARNINGS,
+)
+from detectors.base import SEVERITY_WEIGHTS
 from utils.ui_components import (
     render_executive_summary,
     render_code_metrics,
@@ -33,6 +38,8 @@ def initialize_session_state():
         st.session_state.source_code = None
     if 'file_name' not in st.session_state:
         st.session_state.file_name = None
+    if 'pipeline_report' not in st.session_state:
+        st.session_state.pipeline_report = None
 
 
 def configure_page():
@@ -170,13 +177,89 @@ def handle_analysis(source_code: str, config: dict = None):
             # Store results in session state
             st.session_state.analysis_results = results
             st.session_state.analysis_metrics = metrics
+            st.session_state.pipeline_report = engine.pipeline_report
             
     except ValueError as ve:
+        st.session_state.pipeline_report = engine.pipeline_report
         st.error(f"❌ **Validation Error:** {ve}")
         st.info(" [TIP]  Please ensure your Java file has valid syntax and try again.")
     except Exception as e:
+        st.session_state.pipeline_report = engine.pipeline_report
         st.error(f"❌ **System Error:** {e}")
         st.exception(e)
+
+
+def render_pipeline_page():
+    """
+    Render the detector pipeline page.
+
+    Shows every registered detector in registration order with its run
+    status, deduplicated hit count, severity-weighted hits and normalized
+    score. Every number on the page is recomputable from the formulas shown
+    at the bottom (and documented in docs/architecture.md).
+    """
+    st.markdown("###  Detector Pipeline")
+
+    report = st.session_state.get("pipeline_report")
+    if not report:
+        st.info("Run the analysis first to populate the detector pipeline.")
+        return
+
+    rows = []
+    for row in report["detectors"]:
+        rows.append({
+            "#": row["order"],
+            "Detector ID": row["id"],
+            "Class": row["class"],
+            "Status": row["status"],
+            "Raw Hits": row["raw_hits"],
+            "Hits (deduped)": row["hits"],
+            "Weighted Hits": row["weighted_hits"],
+            "Score": row["score"] if row["score"] is not None else "N/A",
+            "Error": row["error"] or "",
+        })
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Issues (deduped)", report["total_issues"])
+    with col2:
+        st.metric("Duplicates Removed", report["duplicates_removed"])
+    with col3:
+        overall = report["overall_score"]
+        st.metric("Overall Score", f"{overall}/100" if overall is not None else "N/A")
+
+    if report["overall_score"] is None:
+        st.warning(
+            "Degraded path: no detector produced a usable score "
+            "(all detectors disabled, failed, or the source could not be "
+            "parsed), so the overall score is reported as N/A instead of "
+            "defaulting to 100."
+        )
+
+    if any(r["status"] == "error" for r in report["detectors"]):
+        st.warning(
+            "One or more detectors crashed and were isolated in place: they "
+            "contributed zero issues and were excluded from the overall "
+            "score. Remaining detectors were unaffected."
+        )
+
+    warnings = report.get("registry_warnings") or list(REGISTRY_WARNINGS)
+    if warnings:
+        with st.expander(" Registry warnings (rule-id collisions)"):
+            for warning in warnings:
+                st.warning(warning)
+
+    with st.expander(" How to recompute these numbers"):
+        weights = ", ".join(f"{k}={v}" for k, v in SEVERITY_WEIGHTS.items())
+        st.markdown(f"""
+- **Severity weights:** {weights}
+- **Deduplication:** issues colliding on `(Type, Target)` keep the higher
+  severity weight; ties keep the earlier-registered detector's issue.
+- **Per-detector score:** `clamp(100 - {ISSUE_PENALTY} x weighted_hits, 0, 100)`
+- **Overall score:** `round(mean of per-detector scores over detectors with
+  status ok)`, clamped to 0-100; `N/A` when no detector scored.
+        """)
 
 
 def display_analysis_results():

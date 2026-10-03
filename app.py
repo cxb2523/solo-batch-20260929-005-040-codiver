@@ -42,7 +42,8 @@ from java_analyzer.dashboard import (
     initialize_session_state,
     handle_analysis as handle_java_analysis,
     display_analysis_results as display_java_results,
-    render_file_info as render_java_file_info
+    render_file_info as render_java_file_info,
+    render_pipeline_page
 )
 
 # Import Python/Agile dependencies
@@ -253,8 +254,12 @@ def main():
                     # Run analysis with the selected CONFIGURATIONS (passing java_config to respect user choices)
                     handle_java_analysis(source_code, java_config)
                     
-                    if st.session_state.analysis_results is not None:
-                        display_java_results()
+                    result_tab, pipeline_tab = st.tabs([" Analysis Results", " Detector Pipeline"])
+                    with result_tab:
+                        if st.session_state.analysis_results is not None:
+                            display_java_results()
+                    with pipeline_tab:
+                        render_pipeline_page()
                 else:
                     st.info("Click 'Execute CoDiver Analysis' in the sidebar to run the AST Engine.")
             tab_idx += 1

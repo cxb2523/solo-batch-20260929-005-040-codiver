@@ -18,6 +18,7 @@ class ImplementationSmells(CodeSmell):
     - Magic Numbers
     - Deep Nesting
     """
+    detector_id = "implementation"
     
     def detect(self, tree: javalang.tree.CompilationUnit, lines: List[str]) -> List[Dict[str, Any]]:
         """Detect all implementation smells in the given AST."""

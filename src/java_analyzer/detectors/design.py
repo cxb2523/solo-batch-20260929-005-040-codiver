@@ -18,6 +18,7 @@ class DesignSmells(CodeSmell):
     - Lazy Class
     - Abstract Without Abstracts
     """
+    detector_id = "design"
     
     def detect(self, tree: javalang.tree.CompilationUnit, lines: List[str]) -> List[Dict[str, Any]]:
         """Detect all design smells in the given AST."""

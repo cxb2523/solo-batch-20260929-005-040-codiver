@@ -7,12 +7,30 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Any
 import javalang
 
+# Severity weights shared by deduplication and scoring.
+# Higher weight wins when two issues collide on the same rule key.
+SEVERITY_WEIGHTS: Dict[str, int] = {
+    "Critical": 4,
+    "High": 3,
+    "Medium": 2,
+    "Low": 1,
+}
+
 
 class CodeSmell(ABC):
     """
     Abstract base class for all code smell detectors.
     Implements the Strategy Pattern for different detection algorithms.
+
+    Class attributes:
+        detector_id: Stable registry key. Registration in
+            ``analyzer_engine.DETECTOR_REGISTRY`` is first-wins: a second
+            registration under the same id (including a subclass trying to
+            override an already-registered detector) is ignored and recorded
+            in ``REGISTRY_WARNINGS``.
     """
+
+    detector_id: str = "base"
     
     @abstractmethod
     def detect(self, tree: javalang.tree.CompilationUnit, lines: List[str]) -> List[Dict[str, Any]]:
